@@ -1,0 +1,323 @@
+# -*- coding: utf-8 -*-
+# 🔥 XPROXY VIP BOT - نظام إدارة المفاتيح والبروكسي 🔥
+# Telegram Bot لتوزيع مفاتيح الـ Proxy الخاصة بـ Free Fire
+# المطور: DARK SHADOW
+
+import os
+import telebot
+from telebot import types
+import json
+import time
+import re
+import requests
+from datetime import datetime, timedelta
+
+# ====== بيانات البوت (متغيرات Railway) ======
+# سيقوم الكود بجلب هذه القيم من إعدادات Variables في Railway
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))  # تم وضع 0 كقيمة افتراضية لتفادي الأخطاء
+CHANNEL_ID = os.getenv("CHANNEL_ID")
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
+# ====== قاعدة بيانات المفاتيح ======
+keys_db = {
+    "XPROXY-FF2BQT5H": {
+        "type": "AIMNECK",
+        "duration": 1,
+        "used": False,
+        "bound_ip": None,
+        "bound_user": None,
+        "created_at": "2026-07-23"
+    },
+    "XPROXY-TEST1234": {
+        "type": "AIMBODY",
+        "duration": 3,
+        "used": False,
+        "bound_ip": None,
+        "bound_user": None,
+        "created_at": "2026-07-23"
+    }
+}
+
+# ====== قاعدة بيانات المستخدمين ======
+user_keys = {}
+
+# ====== التحقق من الاشتراك بالقناة ======
+def is_subscribed(user_id):
+    try:
+        member = bot.get_chat_member(CHANNEL_ID, user_id)
+        return member.status in ["member", "administrator", "creator"]
+    except:
+        return False
+
+# ====== أمر البداية ======
+@bot.message_handler(commands=['start'])
+def start(message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    if not is_subscribed(user_id):
+        markup = types.InlineKeyboardMarkup()
+        # نستخدم المتغير هنا ليكون الرابط ديناميكياً
+        channel_url = f"https://t.me/{CHANNEL_ID.replace('@', '')}"
+        markup.add(types.InlineKeyboardButton("📢 اشترك في القناة", url=channel_url))
+        markup.add(types.InlineKeyboardButton("✅ تحقق من الاشتراك", callback_data="check_sub"))
+        bot.send_message(
+            chat_id,
+            "⚠️ يرجى الاشتراك في القناة أولاً لاستخدام البوت:",
+            reply_markup=markup
+        )
+        return
+
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    btn1 = types.InlineKeyboardButton("🔑 تفعيل المفتاح", callback_data="activate_key")
+    btn2 = types.InlineKeyboardButton("📊 لوحة المستخدم", callback_data="user_panel")
+    btn3 = types.InlineKeyboardButton("ℹ️ معلومات البوت", callback_data="bot_info")
+    btn4 = types.InlineKeyboardButton("📞 الدعم", callback_data="support")
+    markup.add(btn1, btn2, btn3, btn4)
+
+    bot.send_message(
+        chat_id,
+        f"🔥 **مرحباً بك في XPROXY VIP!** 🔥\n\n"
+        f"👤 المستخدم: {message.from_user.first_name}\n"
+        f"📊 عدد المستخدمين الشهري: **14,968**\n\n"
+        f"استخدم الأزرار أدناه للبدء:",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+# ====== معالجة الأزرار ======
+@bot.callback_query_handler(func=lambda call: True)
+def handle_callback(call):
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+
+    if call.data == "check_sub":
+        if is_subscribed(user_id):
+            bot.send_message(chat_id, "✅ تم التحقق! يمكنك استخدام البوت الآن.")
+            start(call.message)
+        else:
+            bot.send_message(chat_id, "❌ لم تشترك بعد. يرجى الاشتراك ثم اضغط على 'تحقق من الاشتراك'.")
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "activate_key":
+        bot.send_message(chat_id, "🔑 **تفعيل المفتاح**\nأرسل كود المفتاح الخاص بك:")
+        bot.register_next_step_handler(call.message, process_key)
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "user_panel":
+        show_user_panel(chat_id, user_id)
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "bot_info":
+        bot.send_message(
+            chat_id,
+            "🤖 **معلومات البوت:**\n\n"
+            "🔹 الاسم: XPROXY VIP\n"
+            "🔹 الإصدار: 2.0\n"
+            "🔹 المطور: DARK SHADOW\n"
+            f"🔹 القناة: {CHANNEL_ID}\n\n"
+            "💡 هذا البوت مخصص لتوزيع مفاتيح الـ Proxy الخاصة بـ Free Fire."
+        )
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "support":
+        bot.send_message(chat_id, "📞 للدعم: @dark_wala")
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "get_ip":
+        try:
+            ip = requests.get('https://api.ipify.org').text
+            bot.send_message(chat_id, f"🌐 عنوان IP الخاص بك: `{ip}`", parse_mode='Markdown')
+        except:
+            bot.send_message(chat_id, "❌ تعذر الحصول على IP.")
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "renew_key":
+        bot.send_message(chat_id, "🔄 أرسل مفتاح التجديد الجديد:")
+        bot.register_next_step_handler(call.message, renew_key)
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "copy_key":
+        if user_id in user_keys:
+            bot.send_message(chat_id, f"📋 المفتاح: `{user_keys[user_id]['key']}`", parse_mode='Markdown')
+        bot.answer_callback_query(call.id)
+
+# ====== معالجة المفتاح ======
+def process_key(message):
+    chat_id = message.chat.id
+    key = message.text.strip().upper()
+
+    if key not in keys_db:
+        bot.send_message(chat_id, "❌ مفتاح غير صالح. تأكد من الكود وأعد المحاولة.")
+        return
+
+    key_data = keys_db[key]
+
+    if key_data["used"]:
+        bot.send_message(chat_id, "❌ هذا المفتاح مستخدم بالفعل.")
+        return
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🌐 معرفة الـ IP الخاص بي", callback_data="get_ip"))
+
+    bot.send_message(
+        chat_id,
+        f"✅ **تم العثور على المفتاح!**\n\n"
+        f"🔑 المفتاح: `{key}`\n"
+        f"📌 النوع: `{key_data['type']}`\n"
+        f"⏳ المدة: `{key_data['duration']} يوم`\n\n"
+        f"الآن أدخل عنوان الـ IP لربط هذا المفتاح به:",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+    bot.register_next_step_handler(message, bind_ip, key)
+
+# ====== ربط المفتاح بالـ IP ======
+def bind_ip(message, key):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    ip = message.text.strip()
+
+    ip_pattern = r'^(\d{1,3}\.){3}\d{1,3}$'
+    if not re.match(ip_pattern, ip):
+        bot.send_message(chat_id, "❌ عنوان IP غير صالح. أعد المحاولة.")
+        return
+
+    keys_db[key]["used"] = True
+    keys_db[key]["bound_ip"] = ip
+    keys_db[key]["bound_user"] = user_id
+
+    user_keys[user_id] = {
+        "key": key,
+        "ip": ip,
+        "type": keys_db[key]["type"],
+        "expiry": (datetime.now() + timedelta(days=keys_db[key]["duration"])).strftime("%Y-%m-%d")
+    }
+
+    bot.send_message(
+        chat_id,
+        f"✅ **تم ربط المفتاح بنجاح!**\n\n"
+        f"🔑 المفتاح: `{key}`\n"
+        f"📌 النوع: `{keys_db[key]['type']}`\n"
+        f"🌐 IP: `{ip}`\n"
+        f"⏳ ينتهي في: `{user_keys[user_id]['expiry']}`\n\n"
+        f"🔥 استمتع بالخدمة!",
+        parse_mode='Markdown'
+    )
+
+# ====== تجديد المفتاح ======
+def renew_key(message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    new_key = message.text.strip().upper()
+
+    if new_key not in keys_db:
+        bot.send_message(chat_id, "❌ مفتاح غير صالح.")
+        return
+
+    if keys_db[new_key]["used"]:
+        bot.send_message(chat_id, "❌ هذا المفتاح مستخدم بالفعل.")
+        return
+
+    # إزالة المفتاح القديم
+    if user_id in user_keys:
+        old_key = user_keys[user_id]["key"]
+        keys_db[old_key]["used"] = False
+        keys_db[old_key]["bound_ip"] = None
+        keys_db[old_key]["bound_user"] = None
+
+    # ربط المفتاح الجديد
+    keys_db[new_key]["used"] = True
+    keys_db[new_key]["bound_ip"] = user_keys[user_id]["ip"]
+    keys_db[new_key]["bound_user"] = user_id
+
+    user_keys[user_id]["key"] = new_key
+    user_keys[user_id]["type"] = keys_db[new_key]["type"]
+    user_keys[user_id]["expiry"] = (datetime.now() + timedelta(days=keys_db[new_key]["duration"])).strftime("%Y-%m-%d")
+
+    bot.send_message(
+        chat_id,
+        f"✅ **تم تجديد المفتاح بنجاح!**\n\n"
+        f"🔑 المفتاح الجديد: `{new_key}`\n"
+        f"📌 النوع: `{keys_db[new_key]['type']}`\n"
+        f"⏳ ينتهي في: `{user_keys[user_id]['expiry']}`",
+        parse_mode='Markdown'
+    )
+
+# ====== لوحة المستخدم ======
+def show_user_panel(chat_id, user_id):
+    if user_id not in user_keys:
+        bot.send_message(chat_id, "❌ ليس لديك مفتاح مفعل. قم بتفعيل مفتاح أولاً.")
+        return
+
+    data = user_keys[user_id]
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("🔄 تجديد المفتاح", callback_data="renew_key"))
+    markup.add(types.InlineKeyboardButton("📋 نسخ المفتاح", callback_data="copy_key"))
+
+    bot.send_message(
+        chat_id,
+        f"📊 **لوحة المستخدم:**\n\n"
+        f"🔑 المفتاح: `{data['key']}`\n"
+        f"📌 النوع: `{data['type']}`\n"
+        f"🌐 IP: `{data['ip']}`\n"
+        f"⏳ ينتهي في: `{data['expiry']}`",
+        reply_markup=markup,
+        parse_mode='Markdown'
+    )
+
+# ====== أوامر الإدارة ======
+@bot.message_handler(commands=['addkey'])
+def add_key(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ هذا الأمر مخصص للمطور فقط.")
+        return
+
+    try:
+        parts = message.text.split()
+        key = parts[1].upper()
+        key_type = parts[2].upper()
+        duration = int(parts[3])
+
+        keys_db[key] = {
+            "type": key_type,
+            "duration": duration,
+            "used": False,
+            "bound_ip": None,
+            "bound_user": None,
+            "created_at": datetime.now().strftime("%Y-%m-%d")
+        }
+
+        bot.reply_to(
+            message,
+            f"✅ **تم إضافة المفتاح!**\n\n"
+            f"🔑 المفتاح: `{key}`\n"
+            f"📌 النوع: `{key_type}`\n"
+            f"⏳ المدة: `{duration} يوم`",
+            parse_mode='Markdown'
+        )
+    except:
+        bot.reply_to(message, "❌ الاستخدام: /addkey <KEY> <TYPE> <DAYS>")
+
+@bot.message_handler(commands=['keys'])
+def list_keys(message):
+    if message.from_user.id != ADMIN_ID:
+        bot.reply_to(message, "❌ هذا الأمر مخصص للمطور فقط.")
+        return
+
+    msg = "📋 **قائمة المفاتيح:**\n\n"
+    for k, v in keys_db.items():
+        status = "✅ مستخدم" if v["used"] else "❌ غير مستخدم"
+        msg += f"🔑 `{k}` | {v['type']} | {v['duration']} يوم | {status}\n"
+
+    bot.send_message(message.chat.id, msg, parse_mode='Markdown')
+
+# ====== تشغيل البوت ======
+if __name__ == "__main__":
+    print("🔥 XPROXY VIP BOT يعمل الآن...")
+    print("👤 المطور: DARK SHADOW")
+    print("📱 Telegram: @dark_wala")
+    bot.infinity_polling()
